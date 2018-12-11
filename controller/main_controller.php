@@ -10,6 +10,7 @@
 
 namespace tierra\topicsolved\controller;
 
+use phpbb\exception\http_exception;
 use tierra\topicsolved\topicsolved;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 
@@ -20,7 +21,7 @@ use Symfony\Component\HttpFoundation\RedirectResponse;
  */
 class main_controller
 {
-	/* @var \tierra\topicsolved\topicsolved */
+	/** @var \tierra\topicsolved\topicsolved */
 	protected $topicsolved;
 
 	/**
@@ -49,15 +50,19 @@ class main_controller
 
 		if (empty($topic_data))
 		{
-			throw new \phpbb\exception\http_exception(404, 'TOPIC_NOT_FOUND');
+			throw new http_exception(404, 'TOPIC_NOT_FOUND');
 		}
 
 		$this->check_solve_conditions($solve, $topic_data);
 
-		$lock_topic = (bool) $topic_data['forum_lock_solved'];
-		$solved_post_id = $solve == 'solved' ? $post_id : 0;
-		$this->topicsolved->update_topic_solved(
-			$topic_data['topic_id'], $solved_post_id, $lock_topic);
+		if ($solve == 'solved')
+		{
+			$this->topicsolved->mark_solved($topic_data, $post_id);
+		}
+		else
+		{
+			$this->topicsolved->mark_unsolved($topic_data);
+		}
 
 		$post_url = $this->topicsolved->get_link_to_post(
 			$topic_data['forum_id'], $topic_data['topic_id'], $post_id);
@@ -81,16 +86,16 @@ class main_controller
 	{
 		if (!$this->topicsolved->user_can_solve_post($solve, $topic_data))
 		{
-			throw new \phpbb\exception\http_exception(403, 'FORBIDDEN_MARK_SOLVED');
+			throw new http_exception(403, 'FORBIDDEN_MARK_SOLVED');
 		}
 
 		if ($solve == 'solved' && !empty($topic_data['topic_solved']))
 		{
-			throw new \phpbb\exception\http_exception(403, 'TOPIC_ALREADY_SOLVED');
+			throw new http_exception(403, 'TOPIC_ALREADY_SOLVED');
 		}
 		else if ($solve == 'unsolved' && empty($topic_data['topic_solved']))
 		{
-			throw new \phpbb\exception\http_exception(403, 'TOPIC_ALREADY_UNSOLVED');
+			throw new http_exception(403, 'TOPIC_ALREADY_UNSOLVED');
 		}
 	}
 }

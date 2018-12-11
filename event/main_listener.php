@@ -20,14 +20,17 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
  */
 class main_listener implements EventSubscriberInterface
 {
-	/* @var \tierra\topicsolved\topicsolved */
+	/** @var \tierra\topicsolved\topicsolved */
 	protected $topicsolved;
 
-	/* @var \phpbb\controller\helper */
+	/** @var \phpbb\controller\helper */
 	protected $helper;
 
-	/* @var \phpbb\template\template */
+	/** @var \phpbb\template\template */
 	protected $template;
+
+	/** @var bool True if installed on phpBB 3.1. */
+	protected $phpbb31;
 
 	/** @var array Forum topic solved settings for events missing them. */
 	protected $forum_data = array();
@@ -47,6 +50,20 @@ class main_listener implements EventSubscriberInterface
 		$this->topicsolved = $topicsolved;
 		$this->helper = $helper;
 		$this->template = $template;
+		$this->assign_phpbb_version_var();
+	}
+
+	/**
+	 * Assign template variable for checking phpBB 3.1 compatibility.
+	 *
+	 * @return void
+	 */
+	protected function assign_phpbb_version_var()
+	{
+		$this->phpbb31 =
+			phpbb_version_compare(PHPBB_VERSION, '3.1.0@dev', '>=') &&
+			phpbb_version_compare(PHPBB_VERSION, '3.2.0@dev', '<');
+		$this->template->assign_var('TOPIC_SOLVED_PHPBB31', $this->phpbb31);
 	}
 
 	/**
@@ -54,7 +71,7 @@ class main_listener implements EventSubscriberInterface
 	 *
 	 * @return array
 	 */
-	static public function getSubscribedEvents()
+	public static function getSubscribedEvents()
 	{
 		return array(
 			'core.viewforum_modify_topicrow'
@@ -71,8 +88,10 @@ class main_listener implements EventSubscriberInterface
 				=> 'search_modify_tpl_ary',
 			'core.viewtopic_assign_template_vars_before'
 				=> 'viewtopic_assign_template_vars_before',
-			'core.viewtopic_modify_post_row'
-				=> 'viewtopic_modify_post_row',
+			'core.viewtopic_modify_post_row' => array(
+				array('viewtopic_modify_post_row_button', 0),
+				array('viewtopic_modify_post_row_subject', 0),
+			)
 		);
 	}
 
@@ -210,7 +229,14 @@ class main_listener implements EventSubscriberInterface
 		}
 		else
 		{
-			$title = '&nbsp;' . $this->topicsolved->image('list', 'TOPIC_SOLVED', $solved_url);
+			if ($this->phpbb31)
+			{
+				$title = '&nbsp;' . $this->topicsolved->image('list', 'TOPIC_SOLVED', $solved_url);
+			}
+			else
+			{
+				$title = $this->topicsolved->icon($row['forum_solve_color'], 'TOPIC_SOLVED', $solved_url);
+			}
 		}
 
 		return $title;
@@ -240,9 +266,18 @@ class main_listener implements EventSubscriberInterface
 			}
 			else
 			{
-				$this->template->assign_var('TOPIC_SOLVED_IMAGE',
-					$this->topicsolved->image('head', 'TOPIC_SOLVED')
-				);
+				if ($this->phpbb31)
+				{
+					$this->template->assign_var('TOPIC_SOLVED_IMAGE',
+						$this->topicsolved->image('head', 'TOPIC_SOLVED')
+					);
+				}
+				else
+				{
+					$this->template->assign_var('TOPIC_SOLVED_IMAGE',
+						$this->topicsolved->icon($topic_data['forum_solve_color'], 'TOPIC_SOLVED')
+					);
+				}
 			}
 
 			if (!empty($topic_data['forum_solve_color']))
@@ -253,13 +288,13 @@ class main_listener implements EventSubscriberInterface
 	}
 
 	/**
-	 * Assign topic solved post data in topic view.
+	 * Assign topic solved post button data in topic view.
 	 *
 	 * @param \phpbb\event\data $event Post data being rendered.
 	 *
 	 * @return void
 	 */
-	public function viewtopic_modify_post_row($event)
+	public function viewtopic_modify_post_row_button($event)
 	{
 		$topic_data = $event['topic_data'];
 		$post_row = $event['post_row'];
@@ -277,13 +312,28 @@ class main_listener implements EventSubscriberInterface
 			$post_row['S_TOPIC_SOLVED'] = $topic_data['topic_solved'];
 		}
 
+		$event['post_row'] = $post_row;
+	}
+
+	/**
+	 * Assign topic solved post subject in topic view.
+	 *
+	 * @param \phpbb\event\data $event Post data being rendered.
+	 *
+	 * @return void
+	 */
+	public function viewtopic_modify_post_row_subject($event)
+	{
+		$topic_data = $event['topic_data'];
+		$post_row = $event['post_row'];
+
 		if ($topic_data['topic_solved'] == $event['row']['post_id'] &&
 			$topic_data['topic_type'] != POST_GLOBAL)
 		{
-			$post_row['POST_SUBJECT'] .= '&nbsp;&nbsp;';
-
 			if (!empty($topic_data['forum_solve_text']))
 			{
+				$post_row['POST_SUBJECT'] .= '&nbsp;&nbsp;';
+
 				if (!empty($topic_data['forum_solve_color']))
 				{
 					$post_row['POST_SUBJECT'] .= sprintf(
@@ -299,7 +349,15 @@ class main_listener implements EventSubscriberInterface
 			}
 			else
 			{
-				$post_row['POST_SUBJECT'] .= $this->topicsolved->image('post', 'TOPIC_SOLVED');
+				if ($this->phpbb31)
+				{
+					$post_row['POST_SUBJECT'] .= '&nbsp;&nbsp;' .
+						$this->topicsolved->image('post', 'TOPIC_SOLVED');
+				}
+				else
+				{
+					$post_row['POST_SUBJECT'] .= $this->topicsolved->icon($topic_data['forum_solve_color']);
+				}
 			}
 		}
 
@@ -316,8 +374,8 @@ class main_listener implements EventSubscriberInterface
 	 */
 	protected function get_url_set_solved($topic_data, $post_id)
 	{
-		if ($this->topicsolved->user_can_solve_post('solved', $topic_data) &&
-			!$topic_data['topic_solved'])
+		if (!$topic_data['topic_solved'] &&
+			$this->topicsolved->user_can_solve_post('solved', $topic_data))
 		{
 			return $this->helper->route('tierra_topicsolved_controller_mark',
 				array(
@@ -326,8 +384,8 @@ class main_listener implements EventSubscriberInterface
 				)
 			);
 		}
-		else if ($this->topicsolved->user_can_solve_post('unsolved', $topic_data) &&
-			$topic_data['topic_solved'])
+		else if ($topic_data['topic_solved'] &&
+			$this->topicsolved->user_can_solve_post('unsolved', $topic_data))
 		{
 			return $this->helper->route('tierra_topicsolved_controller_mark',
 				array(

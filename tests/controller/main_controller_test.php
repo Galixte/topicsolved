@@ -10,8 +10,6 @@
 
 namespace tierra\topicsolved\tests\controller;
 
-require_once dirname(__FILE__) . '/../../../../../includes/functions.php';
-
 use tierra\topicsolved\controller\main_controller;
 use tierra\topicsolved\topicsolved;
 
@@ -22,18 +20,15 @@ use tierra\topicsolved\topicsolved;
  */
 class main_controller_test extends \phpbb_database_test_case
 {
-	/* @var \tierra\topicsolved\topicsolved */
+	/** @var \tierra\topicsolved\topicsolved */
 	protected $topicsolved;
-
-	/** @var \phpbb\db\driver\driver_interface */
-	protected $db;
 
 	/**
 	 * Define the extension to be tested.
 	 *
 	 * @return string[]
 	 */
-	static protected function setup_extensions()
+	protected static function setup_extensions()
 	{
 		return array('tierra/topicsolved');
 	}
@@ -56,6 +51,9 @@ class main_controller_test extends \phpbb_database_test_case
 	public function setUp()
 	{
 		parent::setUp();
+
+		// Needed for append_sid() call, normally loaded by phpBB init.
+		require_once dirname(__FILE__) . '/../../../../../includes/functions.php';
 	}
 
 	/**
@@ -77,7 +75,7 @@ class main_controller_test extends \phpbb_database_test_case
 
 		$auth = $this->getMock('\phpbb\auth\auth');
 
-		$this->topicsolved = new topicsolved($this->new_dbal(), $user, $auth, $phpbb_root_path, $phpEx);
+		$this->topicsolved = new topicsolved($this->new_dbal(), $user, $auth, $phpbb_dispatcher, $phpbb_root_path, $phpEx);
 
 		return new main_controller($this->topicsolved);
 	}
@@ -87,16 +85,12 @@ class main_controller_test extends \phpbb_database_test_case
 	 */
 	public function test_controller()
 	{
-		$this->markTestIncomplete(
-			"Can't finish this test until migrations are implemented."
-		);
+		$controller = $this->get_controller(1, 'mark');
 
-		//$controller = $this->get_controller(1, 'mark');
+		$response = $controller->mark('solved', 1);
 
-		//$response = $controller->mark('solved', 1);
-
-		//$this->assertInstanceOf('\Symfony\Component\HttpFoundation\RedirectResponse', $response);
-		//$this->assertEquals(302, $response->getStatusCode());
-		//$this->assertEquals($content, $response->getContent());
+		$this->assertInstanceOf('\Symfony\Component\HttpFoundation\RedirectResponse', $response);
+		$this->assertEquals(302, $response->getStatusCode());
+		$this->assertTrue($response->isRedirect('phpBB/viewtopic.php?f=1&t=1&p=1#p1'));
 	}
 }

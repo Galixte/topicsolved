@@ -17,6 +17,9 @@ namespace tierra\topicsolved;
  */
 class topicsolved
 {
+	/** No-one can mark topics as solved. */
+	const TOPIC_SOLVED_NO = 0;
+
 	/** Topic starter and moderators can mark topics as solved. */
 	const TOPIC_SOLVED_YES = 1;
 
@@ -32,6 +35,9 @@ class topicsolved
 	/** @var \phpbb\auth\auth */
 	protected $auth;
 
+	/** @var \phpbb\event\dispatcher_interface */
+	protected $dispatcher;
+
 	/** @var string core.root_path */
 	protected $root_path;
 
@@ -44,6 +50,7 @@ class topicsolved
 	 * @param \phpbb\db\driver\driver_interface $db Database object
 	 * @param \phpbb\user $user
 	 * @param \phpbb\auth\auth $auth
+	 * @param \phpbb\event\dispatcher_interface $dispatcher
 	 * @param string $root_path core.root_path
 	 * @param string $php_ext core.php_ext
 	 */
@@ -51,11 +58,13 @@ class topicsolved
 		\phpbb\db\driver\driver_interface $db,
 		\phpbb\user $user,
 		\phpbb\auth\auth $auth,
+		\phpbb\event\dispatcher_interface $dispatcher,
 		$root_path, $php_ext)
 	{
 		$this->db = $db;
 		$this->user = $user;
 		$this->auth = $auth;
+		$this->dispatcher = $dispatcher;
 		$this->root_path = $root_path;
 		$this->php_ext = $php_ext;
 
@@ -94,7 +103,7 @@ class topicsolved
 
 		if (($topic_data[$forum_permission[$solved]] == topicsolved::TOPIC_SOLVED_MOD ||
 			$topic_data[$forum_permission[$solved]] == topicsolved::TOPIC_SOLVED_YES) &&
-			$this->auth->acl_get('m_'))
+			$this->auth->acl_get('m_', $topic_data['forum_id']))
 		{
 			return true;
 		}
@@ -128,7 +137,7 @@ class topicsolved
 				TOPICS_TABLE => 't',
 			),
 			'WHERE' =>
-				'p.post_id = ' . $this->db->sql_escape($post_id) .
+				'p.post_id = ' . (int) $post_id .
 				' AND t.topic_id = p.topic_id AND f.forum_id = t.forum_id',
 		);
 		$select_sql = $this->db->sql_build_query('SELECT', $select_sql_array);
@@ -140,34 +149,118 @@ class topicsolved
 	}
 
 	/**
-	 * Mark topic as solved with the given post.
+	 * Update topic with the given data.
 	 *
-	 * Post will only be locked if marking as solved, not when unsolving. This
-	 * method does not do any validation. Data should be validated first.
-	 *
-	 * @param int $topic_id Topic to be marked.
-	 * @param int $post_id Solved post or 0 for unsolved topic.
-	 * @param bool $lock Lock the topic after marking as solved.
+	 * @param int $topic_id Topic to update.
+	 * @param array $data Topic data to update.
 	 *
 	 * @return mixed true if successful
 	 */
-	public function update_topic_solved($topic_id, $post_id, $lock = false)
+	public function update_topic($topic_id, $data)
 	{
-		$data = array('topic_solved' => $post_id);
-
-		if ($lock)
-		{
-			$data['topic_status'] = ITEM_LOCKED;
-		}
-
 		$update_sql = $this->db->sql_build_array('UPDATE', $data);
 		$result = $this->db->sql_query('
 			UPDATE ' . TOPICS_TABLE . '
 			SET ' . $update_sql . '
-			WHERE topic_id = ' . $topic_id
+			WHERE topic_id = ' . (int) $topic_id
 		);
 
 		return $result;
+	}
+
+	/**
+	 * Marks a topic as solved.
+	 *
+	 * @param array $topic_data Topic to be marked as solved.
+	 * @param int $post_id Post to mark as the solution.
+	 */
+	public function mark_solved($topic_data, $post_id)
+	{
+		// Database column values to set.
+		$column_data = array('topic_solved' => $post_id);
+
+		if ($topic_data['forum_lock_solved'] &&
+			$this->user_can_lock_post($topic_data['forum_id']))
+		{
+			$column_data['topic_status'] = ITEM_LOCKED;
+		}
+
+		$this->update_topic($topic_data['topic_id'], $column_data);
+
+		/**
+		 * This event allows you to perform additional actions after a topic has been marked as solved.
+		 *
+		 * @event tierra.topicsolved.mark_solved_after
+		 * @var	array	topic_data	Array with general topic data
+		 * @var	array	column_data	Array with topic data that the database has been updated with
+		 * @since 2.2.0
+		 */
+		$vars = array(
+			'topic_data',
+			'column_data',
+		);
+		extract($this->dispatcher->trigger_event('tierra.topicsolved.mark_solved_after', compact($vars)));
+	}
+
+	/**
+	 * Marks a topic as unsolved.
+	 *
+	 * @param array $topic_data Topic to be marked as unsolved.
+	 */
+	public function mark_unsolved($topic_data)
+	{
+		// Database column values to set.
+		$column_data = array('topic_solved' => 0);
+
+		if ($topic_data['forum_lock_solved'] &&
+			$this->auth->acl_get('m_lock', $topic_data['forum_id']))
+		{
+			$column_data['topic_status'] = ITEM_UNLOCKED;
+		}
+
+		$this->update_topic($topic_data['topic_id'], $column_data);
+
+		/**
+		 * This event allows you to perform additional actions after a topic has been marked as unsolved.
+		 *
+		 * @event tierra.topicsolved.mark_unsolved_after
+		 * @var	array	topic_data	Array with general topic data
+		 * @var	array	column_data	Array with topic data that the database has been updated with
+		 * @since 2.2.0
+		 */
+		$vars = array(
+			'topic_data',
+			'column_data',
+		);
+		extract($this->dispatcher->trigger_event('tierra.topicsolved.mark_unsolved_after', compact($vars)));
+	}
+
+	/**
+	 * Checks if the currently logged in user has permission to lock a post.
+	 *
+	 * Regular users won't have permission to solve any topics other than their
+	 * own, and moderator permissions are forum based, so we only need to know
+	 * the forum, not the post.
+	 *
+	 * @param int $forum_id Forum to check permissions on.
+	 *
+	 * @return bool true if user has permission to lock a post.
+	 */
+	public function user_can_lock_post($forum_id)
+	{
+		// Check if user is moderator with appropriate lock permission
+		if ($this->auth->acl_get('m_lock', $forum_id))
+		{
+			return true;
+		}
+
+		// Check if user has "lock own posts" permission
+		if ($this->auth->acl_get('f_user_lock', $forum_id))
+		{
+			return true;
+		}
+
+		return false;
 	}
 
 	/**
@@ -182,13 +275,63 @@ class topicsolved
 	public function image($type, $alt = '', $url = '')
 	{
 		$title = '';
-
 		$markup = $this->user->img('icon_solved_' . $type, $alt);
 
 		if (!empty($alt))
 		{
 			$alt = $this->user->lang($alt);
-			$title = ' title="' . $alt . '"';
+			$title = ' title="' . htmlspecialchars($alt, ENT_QUOTES, 'UTF-8') . '"';
+		}
+
+		if (!empty($url))
+		{
+			$markup = sprintf('<a href="%s"%s>%s</a>',
+				htmlspecialchars($url, ENT_QUOTES, 'UTF-8'), $title, $markup);
+		}
+
+		return $markup;
+	}
+
+	/**
+	 * Generate markup for the given solved indicator icon.
+	 *
+	 * @param string $color Color to use for the icon.
+	 * @param string $alt Language code for title and alternative text.
+	 * @param string $url Optional link to solved post.
+	 *
+	 * @return string HTML markup for icon.
+	 */
+	public function icon($color = '', $alt = '', $url = '')
+	{
+		$title = '';
+		if (empty($color))
+		{
+			$color = '00BF00';
+		}
+		$classes = 'fa fa-check-circle fa-fw';
+
+		/**
+		 * This event makes it possible to customize the solved icon.
+		 *
+		 * @event tierra.topicsolved.render_icon
+		 * @var	string	alt	Alternative text label for link if a URL was provided.
+		 * @var	string	classes	CSS classes used for icon.
+		 * @var	string	color	Color applied to the icon.
+		 * @var	string	url	Link to the solved post.
+		 * @since 2.3.0
+		 */
+		$vars = array('alt', 'classes', 'color', 'url');
+		extract($this->dispatcher->trigger_event('tierra.topicsolved.render_icon', compact($vars)));
+
+		$markup = sprintf(
+			'<i class="%1s" style="color: #%2s" aria-hidden="true"></i>',
+			$classes, $color
+		);
+
+		if (!empty($alt))
+		{
+			$alt = $this->user->lang($alt);
+			$title = ' title="' . htmlspecialchars($alt, ENT_QUOTES, 'UTF-8') . '"';
 		}
 
 		if (!empty($url))

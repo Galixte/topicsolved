@@ -16,6 +16,7 @@ services:
         arguments:
             - @tierra.topicsolved.topicsolved
             - @template
+            - @request
         tags:
             - { name: event.listener }
     tierra.topicsolved.topicsolved:
@@ -24,5 +25,6 @@ services:
             - @dbal.conn
             - @user
             - @auth
+            - @dispatcher
             - %core.root_path%
             - %core.php_ext%
